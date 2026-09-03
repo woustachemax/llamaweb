@@ -3,19 +3,14 @@
 Ollama, but in a browser. A Go agent runs the model; a PyTorch miniGPT trained on
 your own messages picks the reply that sounds most like you.
 
-```
-frontend (Vite/React) → backend (Go) → Ollama            base generation
-                             └────────→ ml (FastAPI/PyTorch)   miniGPT voice layer
-```
-
 ## Quickstart
 
 Requires Go 1.27+, Python 3.10+, Node 18+, and [Ollama](https://ollama.com) running:
 
 ```bash
 ollama pull llama3.2
-make setup      # npm install + python venv + pip install
-./run.sh        # ml :8000, backend :8080, frontend :5173
+make setup      
+./run.sh       
 ```
 
 Open http://localhost:5173. Chat a few times, then hit **train on my messages** in
@@ -36,9 +31,9 @@ Run processes separately with `make ml`, `make backend`, `make frontend`.
 Your messages are logged to `ml/data/user_corpus.txt`. Training fine-tunes the
 miniGPT on next-token prediction over that text. With **match my voice** on:
 
-- `VOICE_MODE=rerank` (default) — Ollama drafts several replies, the miniGPT scores
+- `VOICE_MODE=rerank` (default) - Ollama drafts several replies, the miniGPT scores
   each by token log-probability under your writing, the most you-sounding one wins.
-- `VOICE_MODE=rewrite` — Ollama drafts once, the miniGPT continues it in your style.
+- `VOICE_MODE=rewrite` - Ollama drafts once, the miniGPT continues it in your style.
 
 The miniGPT only knows your corpus; the base model still does the reasoning.
 
