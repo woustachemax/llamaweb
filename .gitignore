@@ -1,0 +1,10 @@
+backend/data/
+backend/llamaweb
+ml/checkpoints/
+ml/data/*.txt
+ml/.venv/
+__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+.DS_Store
