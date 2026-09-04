@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  AuthError,
   Message,
   ModelInfo,
   SessionSummary,
   streamChat,
+  User,
   VoiceStatus,
 } from "./api";
+import Auth from "./components/Auth";
 import Sidebar from "./components/Sidebar";
 import MessageView from "./components/MessageView";
 import VoicePanel from "./components/VoicePanel";
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -25,24 +30,53 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    api
+      .me()
+      .then(setUser)
+      .catch(() => setUser(null))
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  const signOut = useCallback(() => {
+    setUser(null);
+    setSessions([]);
+    setActiveId(null);
+    setMessages([]);
+    setVoiceStatus(null);
+  }, []);
+
+  const guard = useCallback(
+    (e: unknown) => {
+      if (e instanceof AuthError) {
+        signOut();
+        return;
+      }
+      setError(e instanceof Error ? e.message : String(e));
+    },
+    [signOut]
+  );
+
   const refreshSessions = useCallback(async () => {
     try {
       const { sessions } = await api.listSessions();
       setSessions(sessions);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      guard(e);
     }
-  }, []);
+  }, [guard]);
 
   const refreshVoice = useCallback(async () => {
     try {
       setVoiceStatus(await api.voiceStatus());
-    } catch {
-      setVoiceStatus(null);
+    } catch (e) {
+      if (e instanceof AuthError) signOut();
+      else setVoiceStatus(null);
     }
-  }, []);
+  }, [signOut]);
 
   useEffect(() => {
+    if (!user) return;
     refreshSessions();
     refreshVoice();
     api
@@ -51,8 +85,10 @@ export default function App() {
         setModels(m.models);
         setModel(m.default);
       })
-      .catch(() => undefined);
-  }, [refreshSessions, refreshVoice]);
+      .catch((e) => {
+        if (e instanceof AuthError) signOut();
+      });
+  }, [user, refreshSessions, refreshVoice, signOut]);
 
   useEffect(() => {
     if (!activeId) {
@@ -62,22 +98,40 @@ export default function App() {
     api
       .getSession(activeId)
       .then((s) => setMessages(s.messages))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [activeId]);
+      .catch(guard);
+  }, [activeId, guard]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, stage]);
 
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      /* clearing local state regardless */
+    }
+    signOut();
+  };
+
   const newChat = async () => {
-    const s = await api.createSession();
-    await refreshSessions();
-    setActiveId(s.id);
-    setMessages([]);
+    try {
+      const s = await api.createSession();
+      await refreshSessions();
+      setActiveId(s.id);
+      setMessages([]);
+    } catch (e) {
+      guard(e);
+    }
   };
 
   const deleteChat = async (id: string) => {
-    await api.deleteSession(id);
+    try {
+      await api.deleteSession(id);
+    } catch (e) {
+      guard(e);
+      return;
+    }
     if (id === activeId) {
       setActiveId(null);
       setMessages([]);
@@ -116,6 +170,7 @@ export default function App() {
         voice,
       },
       {
+        onUnauthorized: signOut,
         onSession: (id) => {
           if (!activeId) {
             setActiveId(id);
@@ -154,6 +209,14 @@ export default function App() {
     setStage(null);
   };
 
+  if (!authChecked) {
+    return <div className="boot">loading…</div>;
+  }
+
+  if (!user) {
+    return <Auth onAuthed={setUser} />;
+  }
+
   return (
     <div className="layout">
       <Sidebar
@@ -183,6 +246,10 @@ export default function App() {
                 </option>
               ))}
             </select>
+            <span className="who">{user.email}</span>
+            <button className="logout" onClick={logout}>
+              sign out
+            </button>
           </div>
         </header>
 

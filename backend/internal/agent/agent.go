@@ -63,15 +63,15 @@ func recentContext(history []store.Message, userMsg string) string {
 	return b.String()
 }
 
-func (a *Agent) Respond(ctx context.Context, model string, history []store.Message, userMsg string, useVoice bool, ev Events) (Result, error) {
+func (a *Agent) Respond(ctx context.Context, user, model string, history []store.Message, userMsg string, useVoice bool, ev Events) (Result, error) {
 	if model == "" {
 		model = a.cfg.OllamaModel
 	}
 	msgs := a.buildMessages(history, userMsg)
 
 	voiceReady := false
-	if useVoice {
-		if st, err := a.voice.Status(ctx); err == nil && st.Trained {
+	if useVoice && user != "" {
+		if st, err := a.voice.Status(ctx, user); err == nil && st.Trained {
 			voiceReady = true
 		}
 	}
@@ -89,13 +89,13 @@ func (a *Agent) Respond(ctx context.Context, model string, history []store.Messa
 
 	switch a.cfg.VoiceMode {
 	case "rewrite":
-		return a.respondRewrite(ctx, model, msgs, history, userMsg, ev)
+		return a.respondRewrite(ctx, user, model, msgs, history, userMsg, ev)
 	default:
-		return a.respondRerank(ctx, model, msgs, history, userMsg, ev)
+		return a.respondRerank(ctx, user, model, msgs, history, userMsg, ev)
 	}
 }
 
-func (a *Agent) respondRerank(ctx context.Context, model string, msgs []ollama.Message, history []store.Message, userMsg string, ev Events) (Result, error) {
+func (a *Agent) respondRerank(ctx context.Context, user, model string, msgs []ollama.Message, history []store.Message, userMsg string, ev Events) (Result, error) {
 	n := a.cfg.VoiceCandidates
 	if n < 2 {
 		n = 2
@@ -134,7 +134,7 @@ func (a *Agent) respondRerank(ctx context.Context, model string, msgs []ollama.M
 	if ev.OnStage != nil {
 		ev.OnStage("matching your voice")
 	}
-	ranked, err := a.voice.Score(ctx, recentContext(history, userMsg), valid)
+	ranked, err := a.voice.Score(ctx, user, recentContext(history, userMsg), valid)
 	best := valid[0]
 	var ranking []voice.ScoredCandidate
 	if err == nil && ranked.Best != "" {
@@ -146,7 +146,7 @@ func (a *Agent) respondRerank(ctx context.Context, model string, msgs []ollama.M
 	return Result{Text: best, Original: valid[0], Voiced: true, Ranking: ranking}, nil
 }
 
-func (a *Agent) respondRewrite(ctx context.Context, model string, msgs []ollama.Message, history []store.Message, userMsg string, ev Events) (Result, error) {
+func (a *Agent) respondRewrite(ctx context.Context, user, model string, msgs []ollama.Message, history []store.Message, userMsg string, ev Events) (Result, error) {
 	if ev.OnStage != nil {
 		ev.OnStage("drafting")
 	}
@@ -157,7 +157,7 @@ func (a *Agent) respondRewrite(ctx context.Context, model string, msgs []ollama.
 	if ev.OnStage != nil {
 		ev.OnStage("matching your voice")
 	}
-	voiced, err := a.voice.Rewrite(ctx, draft, recentContext(history, userMsg))
+	voiced, err := a.voice.Rewrite(ctx, user, draft, recentContext(history, userMsg))
 	if err != nil || strings.TrimSpace(voiced) == "" {
 		stream(draft, ev.OnToken)
 		return Result{Text: draft, Original: draft}, nil

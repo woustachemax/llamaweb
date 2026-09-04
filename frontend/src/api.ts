@@ -38,30 +38,56 @@ export interface ModelInfo {
   model: string;
 }
 
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `${res.status} ${res.statusText}`);
+export interface User {
+  id: string;
+  email: string;
+}
+
+export class AuthError extends Error {}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, { credentials: "include", ...init });
+  if (res.status === 401) {
+    throw new AuthError("not signed in");
   }
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body.error === "string") message = body.error;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
+function jsonBody(body: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
 export const api = {
-  listSessions: () =>
-    fetch("/app/sessions").then((r) => json<{ sessions: SessionSummary[] }>(r)),
-  getSession: (id: string) => fetch(`/app/sessions/${id}`).then((r) => json<Session>(r)),
-  createSession: () =>
-    fetch("/app/sessions", { method: "POST" }).then((r) => json<Session>(r)),
-  deleteSession: (id: string) => fetch(`/app/sessions/${id}`, { method: "DELETE" }),
-  models: () =>
-    fetch("/app/models").then((r) => json<{ models: ModelInfo[]; default: string }>(r)),
-  voiceStatus: () => fetch("/app/voice/status").then((r) => json<VoiceStatus>(r)),
+  me: () => req<{ user: User }>("/app/auth/me").then((r) => r.user),
+  register: (email: string, password: string) =>
+    req<{ user: User }>("/app/auth/register", jsonBody({ email, password })).then((r) => r.user),
+  login: (email: string, password: string) =>
+    req<{ user: User }>("/app/auth/login", jsonBody({ email, password })).then((r) => r.user),
+  logout: () => req<void>("/app/auth/logout", { method: "POST" }),
+
+  listSessions: () => req<{ sessions: SessionSummary[] }>("/app/sessions"),
+  getSession: (id: string) => req<Session>(`/app/sessions/${id}`),
+  createSession: () => req<Session>("/app/sessions", { method: "POST" }),
+  deleteSession: (id: string) => req<void>(`/app/sessions/${id}`, { method: "DELETE" }),
+  models: () => req<{ models: ModelInfo[]; default: string }>("/app/models"),
+  voiceStatus: () => req<VoiceStatus>("/app/voice/status"),
   trainVoice: (steps?: number) =>
-    fetch("/app/voice/train", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ steps: steps ?? 0 }),
-    }).then((r) => json<Record<string, unknown>>(r)),
+    req<Record<string, unknown>>("/app/voice/train", jsonBody({ steps: steps ?? 0 })),
 };
 
 export interface ChatEvents {
@@ -75,6 +101,7 @@ export interface ChatEvents {
     voiced: boolean;
   }) => void;
   onError?: (message: string) => void;
+  onUnauthorized?: () => void;
 }
 
 export async function streamChat(
@@ -84,10 +111,15 @@ export async function streamChat(
 ): Promise<void> {
   const res = await fetch("/app/chat", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
+  if (res.status === 401) {
+    events.onUnauthorized?.();
+    return;
+  }
   if (!res.ok || !res.body) {
     events.onError?.(await res.text());
     return;

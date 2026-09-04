@@ -18,7 +18,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out["ollama"] = "ok"
 	}
-	if _, err := s.voice.Status(r.Context()); err != nil {
+	if err := s.voice.Health(r.Context()); err != nil {
 		out["voice"] = err.Error()
 	} else {
 		out["voice"] = "ok"
@@ -36,19 +36,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var body struct {
 		Title string `json:"title"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	writeJSON(w, http.StatusOK, s.store.CreateSession(body.Title))
+	writeJSON(w, http.StatusOK, s.store.CreateSession(user.ID, body.Title))
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.store.ListSessions()})
+	user, _ := userFromContext(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.store.ListSessions(user.ID)})
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.store.GetSession(r.PathValue("id"))
+	user, _ := userFromContext(r.Context())
+	sess, err := s.store.GetSession(user.ID, r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "session not found")
 		return
@@ -57,7 +60,8 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteSession(r.PathValue("id")); err != nil {
+	user, _ := userFromContext(r.Context())
+	if err := s.store.DeleteSession(user.ID, r.PathValue("id")); err != nil {
 		writeErr(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -72,6 +76,7 @@ type chatBody struct {
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var body chatBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
@@ -82,10 +87,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.SessionID == "" {
-		body.SessionID = s.store.CreateSession("").ID
+		body.SessionID = s.store.CreateSession(user.ID, "").ID
 	}
 
-	history, err := s.store.History(body.SessionID)
+	history, err := s.store.History(user.ID, body.SessionID)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "session not found")
 		return
@@ -107,7 +112,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	userMsg, err := s.store.AppendMessage(body.SessionID, store.Message{Role: "user", Content: body.Message})
+	userMsg, err := s.store.AppendMessage(user.ID, body.SessionID, store.Message{Role: "user", Content: body.Message})
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		return
@@ -122,7 +127,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		OnStage: func(stage string) { send("stage", map[string]string{"stage": stage}) },
 	}
 
-	res, err := s.agent.Respond(ctx, body.Model, history, body.Message, body.Voice, ev)
+	res, err := s.agent.Respond(ctx, user.ID, body.Model, history, body.Message, body.Voice, ev)
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		return
@@ -132,7 +137,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if res.Voiced {
 		msg.Original = res.Original
 	}
-	saved, err := s.store.AppendMessage(body.SessionID, msg)
+	saved, err := s.store.AppendMessage(user.ID, body.SessionID, msg)
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		return
@@ -147,7 +152,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.voice.Status(r.Context())
+	user, _ := userFromContext(r.Context())
+	st, err := s.voice.Status(r.Context(), user.ID)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -156,11 +162,12 @@ func (s *Server) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVoiceTrain(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var body struct {
 		Steps int `json:"steps"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	res, err := s.voice.Train(r.Context(), s.cfg.CorpusPath, body.Steps)
+	res, err := s.voice.Train(r.Context(), user.ID, s.cfg.CorpusPathFor(user.ID), body.Steps)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -169,6 +176,7 @@ func (s *Server) handleVoiceTrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVoiceGenerate(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var body struct {
 		Prompt      string  `json:"prompt"`
 		MaxTokens   int     `json:"max_tokens"`
@@ -185,7 +193,7 @@ func (s *Server) handleVoiceGenerate(w http.ResponseWriter, r *http.Request) {
 	if body.Temperature == 0 {
 		body.Temperature = 0.8
 	}
-	res, err := s.voice.Generate(r.Context(), body.Prompt, body.MaxTokens, body.Temperature, body.TopK)
+	res, err := s.voice.Generate(r.Context(), user.ID, body.Prompt, body.MaxTokens, body.Temperature, body.TopK)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

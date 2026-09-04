@@ -24,6 +24,7 @@ type Message struct {
 
 type Session struct {
 	ID        string    `json:"id"`
+	OwnerID   string    `json:"owner_id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -31,10 +32,10 @@ type Session struct {
 }
 
 type Store struct {
-	mu         sync.RWMutex
-	sessions   map[string]*Session
-	statePath  string
-	corpusPath string
+	mu        sync.RWMutex
+	sessions  map[string]*Session
+	statePath string
+	corpusDir string
 }
 
 var ErrNotFound = errors.New("not found")
@@ -45,17 +46,17 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-func New(statePath, corpusPath string) (*Store, error) {
+func New(statePath, corpusDir string) (*Store, error) {
 	s := &Store{
-		sessions:   map[string]*Session{},
-		statePath:  statePath,
-		corpusPath: corpusPath,
+		sessions:  map[string]*Session{},
+		statePath: statePath,
+		corpusDir: corpusDir,
 	}
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return nil, err
 	}
-	if corpusPath != "" {
-		if err := os.MkdirAll(filepath.Dir(corpusPath), 0o755); err != nil {
+	if corpusDir != "" {
+		if err := os.MkdirAll(corpusDir, 0o755); err != nil {
 			return nil, err
 		}
 	}
@@ -87,7 +88,7 @@ func (s *Store) persist() {
 	_ = os.Rename(tmp, s.statePath)
 }
 
-func (s *Store) CreateSession(title string) *Session {
+func (s *Store) CreateSession(ownerID, title string) *Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -96,6 +97,7 @@ func (s *Store) CreateSession(title string) *Session {
 	}
 	sess := &Session{
 		ID:        newID(),
+		OwnerID:   ownerID,
 		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -106,11 +108,14 @@ func (s *Store) CreateSession(title string) *Session {
 	return cloneSession(sess)
 }
 
-func (s *Store) ListSessions() []*Session {
+func (s *Store) ListSessions(ownerID string) []*Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	list := make([]*Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
+		if sess.OwnerID != ownerID {
+			continue
+		}
 		clone := *sess
 		clone.Messages = nil
 		list = append(list, &clone)
@@ -119,20 +124,21 @@ func (s *Store) ListSessions() []*Session {
 	return list
 }
 
-func (s *Store) GetSession(id string) (*Session, error) {
+func (s *Store) GetSession(ownerID, id string) (*Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sess, ok := s.sessions[id]
-	if !ok {
+	if !ok || sess.OwnerID != ownerID {
 		return nil, ErrNotFound
 	}
 	return cloneSession(sess), nil
 }
 
-func (s *Store) DeleteSession(id string) error {
+func (s *Store) DeleteSession(ownerID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.sessions[id]; !ok {
+	sess, ok := s.sessions[id]
+	if !ok || sess.OwnerID != ownerID {
 		return ErrNotFound
 	}
 	delete(s.sessions, id)
@@ -140,11 +146,11 @@ func (s *Store) DeleteSession(id string) error {
 	return nil
 }
 
-func (s *Store) AppendMessage(sessionID string, m Message) (Message, error) {
+func (s *Store) AppendMessage(ownerID, sessionID string, m Message) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[sessionID]
-	if !ok {
+	if !ok || sess.OwnerID != ownerID {
 		return Message{}, ErrNotFound
 	}
 	if m.ID == "" {
@@ -160,16 +166,17 @@ func (s *Store) AppendMessage(sessionID string, m Message) (Message, error) {
 	}
 	s.persist()
 	if m.Role == "user" {
-		s.appendCorpus(m.Content)
+		s.appendCorpus(ownerID, m.Content)
 	}
 	return m, nil
 }
 
-func (s *Store) appendCorpus(text string) {
-	if s.corpusPath == "" {
+func (s *Store) appendCorpus(ownerID, text string) {
+	if s.corpusDir == "" {
 		return
 	}
-	f, err := os.OpenFile(s.corpusPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(s.corpusDir, "corpus_"+ownerID+".txt")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
@@ -177,11 +184,11 @@ func (s *Store) appendCorpus(text string) {
 	_, _ = f.WriteString(text + "\n<|endoftext|>\n")
 }
 
-func (s *Store) History(sessionID string) ([]Message, error) {
+func (s *Store) History(ownerID, sessionID string) ([]Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sess, ok := s.sessions[sessionID]
-	if !ok {
+	if !ok || sess.OwnerID != ownerID {
 		return nil, ErrNotFound
 	}
 	return append([]Message(nil), sess.Messages...), nil

@@ -33,6 +33,7 @@ type ollamaGenerateReq struct {
 }
 
 func (s *Server) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var req ollamaGenerateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
@@ -50,7 +51,7 @@ func (s *Server) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !stream {
-		res, err := s.agent.Respond(r.Context(), model, history, req.Prompt, req.Voice, agent.Events{})
+		res, err := s.agent.Respond(r.Context(), user.ID, model, history, req.Prompt, req.Voice, agent.Events{})
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
@@ -72,7 +73,7 @@ func (s *Server) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 		_ = enc.Encode(map[string]any{"model": model, "created_at": nowRFC(), "response": t, "done": false})
 		flusher.Flush()
 	}}
-	res, err := s.agent.Respond(r.Context(), model, history, req.Prompt, req.Voice, ev)
+	res, err := s.agent.Respond(r.Context(), user.ID, model, history, req.Prompt, req.Voice, ev)
 	if err != nil {
 		_ = enc.Encode(map[string]any{"model": model, "created_at": nowRFC(), "response": "", "done": true, "error": err.Error()})
 		flusher.Flush()
@@ -93,6 +94,7 @@ type ollamaChatReq struct {
 }
 
 func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFromContext(r.Context())
 	var req ollamaChatReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
@@ -116,7 +118,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !stream {
-		res, err := s.agent.Respond(r.Context(), model, history, userMsg, req.Voice, agent.Events{})
+		res, err := s.agent.Respond(r.Context(), user.ID, model, history, userMsg, req.Voice, agent.Events{})
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
@@ -144,7 +146,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		})
 		flusher.Flush()
 	}}
-	res, err := s.agent.Respond(r.Context(), model, history, userMsg, req.Voice, ev)
+	res, err := s.agent.Respond(r.Context(), user.ID, model, history, userMsg, req.Voice, ev)
 	if err != nil {
 		_ = enc.Encode(map[string]any{
 			"model": model, "created_at": nowRFC(),

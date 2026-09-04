@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -64,13 +65,18 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	return nil
 }
 
-func (c *Client) Status(ctx context.Context) (Status, error) {
+func (c *Client) Health(ctx context.Context) error {
+	return c.do(ctx, http.MethodGet, "/health", nil, nil)
+}
+
+func (c *Client) Status(ctx context.Context, user string) (Status, error) {
 	var s Status
-	err := c.do(ctx, http.MethodGet, "/status", nil, &s)
+	err := c.do(ctx, http.MethodGet, "/status?user="+url.QueryEscape(user), nil, &s)
 	return s, err
 }
 
 type scoreRequest struct {
+	User       string   `json:"user"`
 	Context    string   `json:"context"`
 	Candidates []string `json:"candidates"`
 }
@@ -86,13 +92,14 @@ type scoreResponse struct {
 	Best   string            `json:"best"`
 }
 
-func (c *Client) Score(ctx context.Context, contextText string, candidates []string) (scoreResponse, error) {
+func (c *Client) Score(ctx context.Context, user, contextText string, candidates []string) (scoreResponse, error) {
 	var r scoreResponse
-	err := c.do(ctx, http.MethodPost, "/score", scoreRequest{Context: contextText, Candidates: candidates}, &r)
+	err := c.do(ctx, http.MethodPost, "/score", scoreRequest{User: user, Context: contextText, Candidates: candidates}, &r)
 	return r, err
 }
 
 type rewriteRequest struct {
+	User        string  `json:"user"`
 	Draft       string  `json:"draft"`
 	Context     string  `json:"context"`
 	Temperature float64 `json:"temperature"`
@@ -103,15 +110,16 @@ type rewriteResponse struct {
 	Text string `json:"text"`
 }
 
-func (c *Client) Rewrite(ctx context.Context, draft, contextText string) (string, error) {
+func (c *Client) Rewrite(ctx context.Context, user, draft, contextText string) (string, error) {
 	var r rewriteResponse
 	err := c.do(ctx, http.MethodPost, "/rewrite", rewriteRequest{
-		Draft: draft, Context: contextText, Temperature: 0.8, MaxTokens: 400,
+		User: user, Draft: draft, Context: contextText, Temperature: 0.8, MaxTokens: 400,
 	}, &r)
 	return r.Text, err
 }
 
 type generateRequest struct {
+	User        string  `json:"user"`
 	Prompt      string  `json:"prompt"`
 	MaxTokens   int     `json:"max_tokens"`
 	Temperature float64 `json:"temperature"`
@@ -123,15 +131,16 @@ type generateResponse struct {
 	Completion string `json:"completion"`
 }
 
-func (c *Client) Generate(ctx context.Context, prompt string, maxTokens int, temperature float64, topK int) (generateResponse, error) {
+func (c *Client) Generate(ctx context.Context, user, prompt string, maxTokens int, temperature float64, topK int) (generateResponse, error) {
 	var r generateResponse
 	err := c.do(ctx, http.MethodPost, "/generate", generateRequest{
-		Prompt: prompt, MaxTokens: maxTokens, Temperature: temperature, TopK: topK,
+		User: user, Prompt: prompt, MaxTokens: maxTokens, Temperature: temperature, TopK: topK,
 	}, &r)
 	return r, err
 }
 
 type trainRequest struct {
+	User       string `json:"user"`
 	CorpusPath string `json:"corpus_path"`
 	Steps      int    `json:"steps"`
 }
@@ -145,8 +154,8 @@ type TrainResult struct {
 	Seconds   float64 `json:"seconds"`
 }
 
-func (c *Client) Train(ctx context.Context, corpusPath string, steps int) (TrainResult, error) {
+func (c *Client) Train(ctx context.Context, user, corpusPath string, steps int) (TrainResult, error) {
 	var r TrainResult
-	err := c.do(ctx, http.MethodPost, "/train", trainRequest{CorpusPath: corpusPath, Steps: steps}, &r)
+	err := c.do(ctx, http.MethodPost, "/train", trainRequest{User: user, CorpusPath: corpusPath, Steps: steps}, &r)
 	return r, err
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"llamaweb/internal/agent"
+	"llamaweb/internal/auth"
 	"llamaweb/internal/config"
 	"llamaweb/internal/ollama"
 	"llamaweb/internal/server"
@@ -21,15 +22,20 @@ import (
 func main() {
 	cfg := config.Load()
 
-	st, err := store.New(cfg.StatePath, cfg.CorpusPath)
+	st, err := store.New(cfg.StatePath, cfg.CorpusDir)
 	if err != nil {
 		log.Fatalf("store: %v", err)
+	}
+
+	au, err := auth.New(cfg.AuthPath)
+	if err != nil {
+		log.Fatalf("auth: %v", err)
 	}
 
 	llm := ollama.New(cfg.OllamaHost)
 	v := voice.New(cfg.MLHost)
 	ag := agent.New(cfg, llm, v)
-	srv := server.New(cfg, st, llm, v, ag)
+	srv := server.New(cfg, st, au, llm, v, ag)
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

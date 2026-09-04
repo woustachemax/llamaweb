@@ -9,10 +9,10 @@ from minigpt.model import MiniGPT
 from minigpt.tokenizer import VoiceTokenizer
 
 _lock = threading.Lock()
-_state = {"model": None, "tok": None, "meta": None, "mtime": None}
+_states = {}
 
 
-def _ckpt_paths(out_dir=OUT_DIR):
+def _ckpt_paths(out_dir):
     return (
         os.path.join(out_dir, "ckpt.pt"),
         os.path.join(out_dir, "vocab.json"),
@@ -20,19 +20,20 @@ def _ckpt_paths(out_dir=OUT_DIR):
     )
 
 
-def is_trained(out_dir=OUT_DIR):
+def is_trained(out_dir):
     ckpt, vocab, _ = _ckpt_paths(out_dir)
     return os.path.exists(ckpt) and os.path.exists(vocab)
 
 
-def load(out_dir=OUT_DIR, force=False):
+def load(out_dir, force=False):
     ckpt_path, vocab_path, meta_path = _ckpt_paths(out_dir)
     if not is_trained(out_dir):
         raise RuntimeError("voice model is not trained yet")
     mtime = os.path.getmtime(ckpt_path)
     with _lock:
-        if not force and _state["model"] is not None and _state["mtime"] == mtime:
-            return _state["model"], _state["tok"], _state["meta"]
+        cached = _states.get(out_dir)
+        if not force and cached is not None and cached["mtime"] == mtime:
+            return cached["model"], cached["tok"], cached["meta"]
         device = torch.device(DEVICE if DEVICE == "cpu" or torch.cuda.is_available() else "cpu")
         blob = torch.load(ckpt_path, map_location=device)
         mc = ModelConfig(**blob["config"])
@@ -44,11 +45,11 @@ def load(out_dir=OUT_DIR, force=False):
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 meta = json.load(f)
-        _state.update(model=model, tok=tok, meta=meta, mtime=mtime)
+        _states[out_dir] = {"model": model, "tok": tok, "meta": meta, "mtime": mtime}
         return model, tok, meta
 
 
-def status(out_dir=OUT_DIR):
+def status(out_dir):
     if not is_trained(out_dir):
         return {"trained": False, "notes": ["train the voice model from the app or POST /train"]}
     _, tok, meta = load(out_dir)
